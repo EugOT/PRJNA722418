@@ -1,0 +1,1064 @@
+---
+title: "Comparative analysis between Tbx3+Grpr positive astrocytes and Tanycytes of ventromedial nucleus of hypothalamus (Affinati et al., 2021)"
+author: "Evgenii O. Tretiakov"
+date: "`r Sys.Date()`"
+format:
+  html:
+    toc: true
+    df-print: paged
+    code-fold: true
+    fig-width: 9
+    fig-height: 12
+    fig-format: retina
+    fig-responsive: true
+    fig-dpi: 200
+execute:
+  keep-md: false
+  echo: true
+  error: false
+  message: false
+  warning: false
+  debug: false
+knitr:
+  opts_chunk:
+    autodep: true
+    fig.align: center
+    fig.retina: 2
+    fig.width: 14
+    fig.height: 12
+---
+
+```{r setup, include = FALSE}
+DOCNAME <- "compare-Tbx3-Grpr-Tanycytes-ventormedial-nucleus-hypothalamus"
+NOW <- Sys.time()
+
+# Time chunks during knitting
+knitr::knit_hooks$set(timeit = function(before) {
+  if (before) {
+    print(paste("Start:", Sys.time()))
+    NOW <<- Sys.time()
+  } else {
+    print(paste("Stop:", Sys.time()))
+    print(Sys.time() - NOW)
+  }
+})
+
+knitr::knit_hooks$set(debug = function(before, options, envir) {
+  if (!before) {
+    message(
+      paste(names(envir), as.list(envir),
+        sep = " = ", collapse = "\n"
+      )
+    )
+  }
+})
+
+knitr::opts_chunk$set(
+  cache          = FALSE,
+  dev            = c("png", "pdf"),
+  timeit         = TRUE
+)
+```
+
+## Load data and setup parameters
+
+```{r libraries, cache=FALSE}
+Sys.setenv(RETICULATE_PYTHON = "/opt/python/3.8.8/bin/python")
+
+# Load tidyverse infrastructure packages
+suppressPackageStartupMessages({
+  library(future)
+  library(here)
+  library(tidyverse)
+  library(magrittr)
+  library(stringr)
+  library(skimr)
+  library(RColorBrewer)
+  library(viridis)
+})
+reticulate::use_condaenv("/opt/python/3.8.8/bin/python")
+
+# Load packages for scRNA-seq analysis and visualisation
+suppressPackageStartupMessages({
+  library(ggplot2)
+  library(cowplot)
+  library(patchwork)
+  library(ggstatsplot)
+  library(sceasy)
+  library(Seurat)
+  library(SeuratDisk)
+  library(SeuratWrappers)
+  library(schex)
+  library(scCustomize)
+})
+```
+
+### Set paths
+
+```{r paths}
+src_dir <- here("../code/")
+data_dir <- here("data/")
+output_dir <- here("output")
+plots_dir <- here(output_dir, "figures/")
+tables_dir <- here(output_dir, "tables/")
+```
+
+### Load helper functions and gene-sets
+
+```{r source, cache = FALSE}
+source(here(src_dir, "genes.R"))
+source(here(src_dir, "functions.R"))
+```
+
+### Set fixed variables
+
+```{r params-computation, cache = FALSE}
+# set seed
+reseed <- 42
+set.seed(seed = reseed)
+
+# Parameters for parallel execution
+n_cores <- 8
+plan("multisession", workers = n_cores)
+options(
+  future.globals.maxSize = 1999999 * 1024^2,
+  future.rng.onMisuse = "ignore"
+)
+plan()
+
+
+# ggplot2 theme
+theme_set(ggmin::theme_powerpoint())
+```
+
+```{r params}
+bioproject <- "PRJNA722418"
+cb_fpr <- 0.001
+
+refine_metadata_levels <- function(seurat_data) {
+  for (i in base::colnames(seurat_data@meta.data)) {
+    if (base::is.factor(seurat_data@meta.data[[i]])) {
+      base::print(base::paste("Re-evaluating levels for a factor column", i))
+      base::print(base::paste("before:", base::paste(
+        base::levels(seurat_data@meta.data[[i]]), collapse = ", "
+      )))
+      seurat_data@meta.data[[i]] <-
+        base::droplevels(seurat_data@meta.data[[i]])  # need to drop levels of the removed values
+      base::print(base::paste("after:", base::paste(
+        base::levels(seurat_data@meta.data[[i]]), collapse = ", "
+      )))
+    }
+  }
+  return(seurat_data)
+}
+```
+
+## Load predicted Tanycytes data
+
+```{r load-seurat}
+srt_path <- here(
+  data_dir,
+  sprintf("%s-whole_dataset-fpr_%s-clusters.h5Seurat",
+          bioproject, cb_fpr)
+)
+
+srt <- LoadH5Seurat(file = srt_path)
+srt <- UpdateSeuratObject(srt)
+srt <- refine_metadata_levels(srt)
+
+Grpr_metadata <- read_tsv(here(
+  tables_dir,
+  sprintf("%s-Grpr-Tbx3-astrocytes_dataset.tsv",
+          bioproject)))
+
+astrodata <- read_tsv(here(
+  tables_dir, "class_cello",
+  sprintf("%s-astrocytes_dataset-%s-initial_selection.tsv",
+          bioproject, cb_fpr)))
+
+metadata <- read_tsv(here(
+  tables_dir, "class_cello",
+  sprintf("%s-whole_dataset-%s-CellO_output.tsv",
+          bioproject, cb_fpr)))
+metadata <- metadata |> 
+  filter(cell_name %in% Grpr_metadata$cell_name | ora_celltype %in% c("Bergmann glia", "Astrocytes"))
+metadata$ora_celltype |> table()
+srt <- subset(srt, cells = metadata$cell_name)
+
+metadata_m <- 
+  metadata |>
+  select(!c(`...1`:log10GenesPerUMI,
+            barcode:SCT_snn_res.4.00000099999998)) |>
+  full_join(srt@meta.data)
+
+glimpse(metadata_m)
+rownames(metadata_m) <- metadata_m$cell_name
+srt@meta.data <- metadata_m[colnames(srt), ]
+rownames(srt@meta.data) <- colnames(srt)
+
+srt <-
+  Store_Palette_Seurat(
+    seurat_object = srt,
+    palette = c(
+      "#ffff00", "#fae200", "#f4c500", "#eeab00", "#e99500",
+      "#e37f00", "#dd6b00", "#d75b00", "#d04c00", "#c93e00",
+      "#c33300", "#bc2800", "#b42003", "#ad1941", "#a41281",
+      "#9c0db7", "#9309dd", "#8906f7", "#7f04ff", "#7402f6",
+      "#6701db", "#5900b0", "#49007e", "#32003e", "#000000"
+    ),
+    palette_name = "expr_Colour_Palette_gnuplot_rette_gnuplot_r")
+
+srt <-
+  Store_Palette_Seurat(
+    seurat_object = srt,
+    palette = rev(brewer.pal(n = 11, name = "Spectral")),
+    palette_name = "div_Colour_Pal"
+  )
+
+colours_code <- c(
+  "0" = "grey30",
+  "1" = "blue",
+  "2" = "skyblue",
+  "3" = "forestgreen",
+  "4" = "greenyellow",
+  "5" = "yellow",
+  "6" = "orangered",
+  "7" = "grey70"
+)
+
+colours_region <- c(
+  "ARC" = "grey30",
+  "LHA" = "blue",
+  "MnPO" = "skyblue",
+  "POA" = "forestgreen",
+  "PVN" = "greenyellow",
+  "SCN" = "yellow",
+  "VMH" = "orangered",
+  "VPH" = "grey70"
+)
+
+coded_region <- c(
+  "0" = "ARC" ,
+  "1" = "LHA" ,
+  "2" = "MnPO",
+  "3" = "POA" ,
+  "4" = "PVN" ,
+  "5" = "SCN" ,
+  "6" = "VMH" ,
+  "7" = "VPH"
+)
+srt <- refine_metadata_levels(srt)
+print(srt)
+invisible(gc())
+```
+
+
+## Preprocess data
+
+```{r scale-data}
+Idents(object = srt) <- "ora_celltype"
+table(Idents(srt))
+
+srt <-
+  FindVariableFeatures(
+    srt,
+    selection.method = "vst",
+    nfeatures = 2000
+  )
+top100 <- head(VariableFeatures(srt), 100)
+plot5 <- VariableFeaturePlot(srt)
+LabelPoints(plot = plot5, points = top100, repel = TRUE, xnudge = 0, ynudge = 0)
+
+hvg <- VariableFeatures(srt)
+var_regex <- "^Hla-|^Ig[hjkl]|^Rna|^mt-|^Rp[sl]|^Hb[^(p)]|^Gm"
+hvg <- hvg[str_detect(pattern = var_regex, string = hvg, negate = TRUE)]
+
+srt <- ScaleData(srt, features = hvg)
+
+npcs <- 30
+srt <- RunPCA(srt,
+  features = hvg,
+  npcs = npcs,
+  seed.use = reseed,
+  verbose = TRUE
+)
+
+selected_pcs <- seq(20)
+srt <-
+  srt |>
+  FindNeighbors(
+    dims = selected_pcs,
+    annoy.metric = "euclidean",
+    n.trees = 100,
+    verbose = FALSE
+  ) |>
+  RunUMAP(
+    dims = selected_pcs,
+    return.model = FALSE,
+    umap.method = "uwot",
+    n.epochs = 1000L,
+    metric = "cosine",
+    init = "pca",
+    seed.use = reseed,
+    verbose = FALSE
+  )
+
+print(srt)
+glimpse(srt@meta.data)
+
+invisible(gc())
+```
+
+```{r pca12-gfeatures, fig.asp=1.618, fig.width=12}
+FeaturePlot_scCustom(
+  srt,
+  reduction = "pca",
+  features = c(
+    "Grpr", "Tbx3", "Lhx2",
+    "Rax", "Adm", "Trhde",
+    "Notum", "Sulf1", "Hes5",
+    "Hes1", "Dlk1", "Tgfb2",
+    "Sox8", "Sox9", "Sox11",
+    "Tgfb2", "Kcnj10", "Aqp4",
+    "Ikbkg", "Nfkb1", "Trhr1",
+    "Vim", "Nes", "Col25a1",
+    "Nfia", "Hepacam", "Ndrg2",
+    "Ntrk2", "Ntsr2", "Adcyap1r1", 
+    "Slc1a3", "Htra1","Gfap"
+    ),
+  num_columns = 4, 
+  alpha_exp = 0.75)
+```
+
+```{r pca23-gfeatures, fig.asp=1.618, fig.width=12}
+FeaturePlot_scCustom(
+  srt, reduction = "pca", dims = c(2, 3),
+  features = c(
+    "Grpr", "Tbx3", "Lhx2",
+    "Rax", "Adm", "Trhde",
+    "Notum", "Sulf1", "Hes5",
+    "Hes1", "Dlk1", "Tgfb2",
+    "Sox8", "Sox9", "Sox11",
+    "Tgfb2", "Kcnj10", "Aqp4",
+    "Ikbkg", "Nfkb1", "Trhr1",
+    "Vim", "Nes", "Col25a1",
+    "Nfia", "Hepacam", "Ndrg2",
+    "Ntrk2", "Ntsr2", "Adcyap1r1", 
+    "Slc1a3", "Htra1","Gfap"
+    ),
+  num_columns = 4, 
+  alpha_exp = 0.75)
+```
+
+```{r pca34-gfeatures, fig.asp=1.618, fig.width=12}
+FeaturePlot_scCustom(
+  srt, 
+  reduction = "pca",
+  dims = c(3, 4),
+  features = c(
+    "Grpr", "Tbx3", "Lhx2",
+    "Rax", "Adm", "Trhde",
+    "Notum", "Sulf1", "Hes5",
+    "Hes1", "Dlk1", "Tgfb2",
+    "Sox8", "Sox9", "Sox11",
+    "Tgfb2", "Kcnj10", "Aqp4",
+    "Ikbkg", "Nfkb1", "Trhr1",
+    "Vim", "Nes", "Col25a1",
+    "Nfia", "Hepacam", "Ndrg2",
+    "Ntrk2", "Ntsr2", "Adcyap1r1", 
+    "Slc1a3", "Htra1","Gfap"
+    ),
+  num_columns = 4, 
+  alpha_exp = 0.75)
+```
+
+```{r pca45-gfeatures, fig.asp=1.618, fig.width=12}
+FeaturePlot_scCustom(
+  srt, 
+  reduction = "pca",
+  dims = c(4, 5),
+  features = c(
+    "Grpr", "Tbx3", "Lhx2",
+    "Rax", "Adm", "Trhde",
+    "Notum", "Sulf1", "Hes5",
+    "Hes1", "Dlk1", "Tgfb2",
+    "Sox8", "Sox9", "Sox11",
+    "Tgfb2", "Kcnj10", "Aqp4",
+    "Ikbkg", "Nfkb1", "Trhr1",
+    "Vim", "Nes", "Col25a1",
+    "Nfia", "Hepacam", "Ndrg2",
+    "Ntrk2", "Ntsr2", "Adcyap1r1", 
+    "Slc1a3", "Htra1","Gfap"
+    ),
+  num_columns = 4, 
+  alpha_exp = 0.75)
+```
+
+```{r pca56-gfeatures, fig.asp=1.618, fig.width=12}
+FeaturePlot_scCustom(
+  srt, 
+  reduction = "pca",
+  dims = c(5, 6),
+  features = c(
+    "Grpr", "Tbx3", "Lhx2",
+    "Rax", "Adm", "Trhde",
+    "Notum", "Sulf1", "Hes5",
+    "Hes1", "Dlk1", "Tgfb2",
+    "Sox8", "Sox9", "Sox11",
+    "Tgfb2", "Kcnj10", "Aqp4",
+    "Ikbkg", "Nfkb1", "Trhr1",
+    "Vim", "Nes", "Col25a1",
+    "Nfia", "Hepacam", "Ndrg2",
+    "Ntrk2", "Ntsr2", "Adcyap1r1", 
+    "Slc1a3", "Htra1","Gfap"
+    ),
+  num_columns = 4, 
+  alpha_exp = 0.75)
+```
+
+```{r pca67-gfeatures, fig.asp=1.618, fig.width=12}
+FeaturePlot_scCustom(
+  srt, 
+  reduction = "pca",
+  dims = c(6, 7),
+  features = c(
+    "Grpr", "Tbx3", "Lhx2",
+    "Rax", "Adm", "Trhde",
+    "Notum", "Sulf1", "Hes5",
+    "Hes1", "Dlk1", "Tgfb2",
+    "Sox8", "Sox9", "Sox11",
+    "Tgfb2", "Kcnj10", "Aqp4",
+    "Ikbkg", "Nfkb1", "Trhr1",
+    "Vim", "Nes", "Col25a1",
+    "Nfia", "Hepacam", "Ndrg2",
+    "Ntrk2", "Ntsr2", "Adcyap1r1", 
+    "Slc1a3", "Htra1","Gfap"
+    ),
+  num_columns = 4, 
+  alpha_exp = 0.75)
+```
+
+
+```{r pca78-gfeatures, fig.asp=1.618, fig.width=12}
+FeaturePlot_scCustom(
+  srt, 
+  reduction = "pca",
+  dims = c(7, 8),
+  features = c(
+    "Grpr", "Tbx3", "Lhx2",
+    "Rax", "Adm", "Trhde",
+    "Notum", "Sulf1", "Hes5",
+    "Hes1", "Dlk1", "Tgfb2",
+    "Sox8", "Sox9", "Sox11",
+    "Tgfb2", "Kcnj10", "Aqp4",
+    "Ikbkg", "Nfkb1", "Trhr1",
+    "Vim", "Nes", "Col25a1",
+    "Nfia", "Hepacam", "Ndrg2",
+    "Ntrk2", "Ntsr2", "Adcyap1r1", 
+    "Slc1a3", "Htra1","Gfap"
+    ),
+  num_columns = 4, 
+  alpha_exp = 0.75)
+```
+
+```{r pca89-gfeatures, fig.asp=1.618, fig.width=12}
+FeaturePlot_scCustom(
+  srt, 
+  reduction = "pca",
+  dims = c(8, 9),
+  features = c(
+    "Grpr", "Tbx3", "Lhx2",
+    "Rax", "Adm", "Trhde",
+    "Notum", "Sulf1", "Hes5",
+    "Hes1", "Dlk1", "Tgfb2",
+    "Sox8", "Sox9", "Sox11",
+    "Tgfb2", "Kcnj10", "Aqp4",
+    "Ikbkg", "Nfkb1", "Trhr1",
+    "Vim", "Nes", "Col25a1",
+    "Nfia", "Hepacam", "Ndrg2",
+    "Ntrk2", "Ntsr2", "Adcyap1r1", 
+    "Slc1a3", "Htra1","Gfap"
+    ),
+  num_columns = 4, 
+  alpha_exp = 0.75)
+```
+
+
+
+```{r pc1, fig.asp=1.618}
+PC_Plotting(seurat_object = srt, dim_number = 1)
+```
+
+```{r pc2, fig.asp=1.618}
+PC_Plotting(seurat_object = srt, dim_number = 2)
+```
+
+```{r pc3, fig.asp=1.618}
+PC_Plotting(seurat_object = srt, dim_number = 3)
+```
+
+```{r pc4, fig.asp=1.618}
+PC_Plotting(seurat_object = srt, dim_number = 4)
+```
+
+
+```{r}
+Grpr_metadata <- Grpr_metadata |> filter(cell_name %in% colnames(srt))
+Idents(object = srt, cells = astrodata$cell_name) <- "Astrocytes_selected"
+Idents(object = srt, cells = Grpr_metadata$cell_name) <- "Astrocytes_Grpr|Tbx3"
+Cluster_Highlight_Plot(
+  seurat_object = srt,
+  cluster_name = "Bergmann glia",
+  highlight_color = "firebrick",
+  background_color = "lightgray")
+Cluster_Highlight_Plot(
+  seurat_object = srt,
+  cluster_name = "Astrocytes",
+  highlight_color = "navy",
+  background_color = "lightgray")
+Cluster_Highlight_Plot(
+  seurat_object = srt,
+  cluster_name = "Astrocytes_selected",
+  highlight_color = "forestgreen",
+  background_color = "lightgray")
+Cluster_Highlight_Plot(
+  seurat_object = srt,
+  cluster_name = "Astrocytes_Grpr|Tbx3",
+  highlight_color = "orangered",
+  background_color = "lightgray")
+```
+
+```{r}
+table(Idents(srt))
+srt$k_tree |> table()
+```
+
+```{r umap-features, fig.asp=1.618, fig.width=12}
+FeaturePlot_scCustom(
+  srt, 
+  reduction = "umap",
+  features = c(
+    "Grpr", "Tbx3", "Lhx2",
+    "Rax", "Adm", "Trhde",
+    "Notum", "Sulf1", "Hes5",
+    "Hes1", "Dlk1", "Tgfb2",
+    "Sox8", "Sox9", "Sox11",
+    "Tgfb2", "Kcnj10", "Aqp4",
+    "Ikbkg", "Nfkb1", "Trhr1",
+    "Vim", "Nes", "Col25a1",
+    "Nfia", "Hepacam", "Ndrg2",
+    "Ntrk2", "Ntsr2", "Adcyap1r1", 
+    "Slc1a3", "Htra1","Gfap"
+    ),
+  num_columns = 4, 
+  alpha_exp = 0.75)
+```
+
+```{r umap-features-sub, fig.asp=1.218, fig.width=12}
+FeaturePlot_scCustom(
+  srt, 
+  reduction = "umap",
+  features = c(
+    "Grpr", "Tbx3", "Adm",
+    "Notum", "Sulf1", "Hes5",
+    "Hes1", "Sox9", "Sox11",
+    "Tgfb2", "Ikbkg", "Nfkb1",
+    "Vim", "Nes", "Col25a1",
+    "Nfia", "Hepacam", "Ndrg2",
+    "Ntrk2", "Ntsr2", "Adcyap1r1", 
+    "Htra1"
+    ),
+  num_columns = 4, 
+  alpha_exp = 0.75)
+```
+
+## Markers for comparison
+
+```{r umap-features2, fig.asp=1.618, fig.width=12}
+FeaturePlot(
+  srt, 
+  reduction = "umap",
+  features = c(
+    "Grpr", "Tbx3", "Lhx2",
+    "Rax", "Adm", "Trhde",
+    "Notum", "Sulf1", "Hes5",
+    "Hes1", "Dlk1", "Tgfb2",
+    "Sox8", "Sox9", "Sox11",
+    "Tgfb2", "Kcnj10", "Aqp4",
+    "Ikbkg", "Nfkb1", "Trhr1",
+    "Vim", "Nes", "Col25a1",
+    "Nfia", "Hepacam", "Ndrg2",
+    "Ntrk2", "Ntsr2", "Adcyap1r1", 
+    "Slc1a3", "Htra1","Gfap"
+    ),
+  ncol = 4,
+  slot = "counts",
+  order = TRUE)
+```
+
+
+```{r umap-features2-sub, fig.asp=1.218, fig.width=12}
+FeaturePlot(
+  srt, 
+  reduction = "umap",
+  features = c(
+    "Grpr", "Tbx3", "Adm",
+    "Notum", "Sulf1", "Hes5",
+    "Hes1", "Sox9", "Sox11",
+    "Tgfb2", "Ikbkg", "Nfkb1",
+    "Vim", "Nes", "Col25a1",
+    "Nfia", "Hepacam", "Ndrg2",
+    "Ntrk2", "Ntsr2", "Adcyap1r1", 
+    "Htra1"
+    ),
+  ncol = 4,
+  slot = "counts",
+  order = TRUE)
+```
+
+```{r cello-find-marker-genes}
+invisible(gc())
+plan("sequential")
+invisible(gc())
+plan("multisession", workers = n_cores)
+srt2 <- srt
+all_markers_genes_class <-
+  FindAllMarkers(object = srt, verbose = T, test.use = "LR", only.pos = F, min.pct = 0.001, logfc.threshold = 0.01, max.cells.per.ident = 2000, random.seed = reseed)
+all_markers_genes_class <-
+  all_markers_genes_class %>%
+  Add_Pct_Diff()
+write_csv(all_markers_genes_class, here(tables_dir, sprintf("%s-all-marker-genes-astro-vs-radial.csv", bioproject)))
+all_markers_genes_class
+```
+
+## Astrocytes Grpr/Tbx3
+
+### MA-plot
+
+```{r plt-ma-astrocytes, fig.width=10, fig.height=6}
+all_markers_genes <- all_markers_genes_class
+target <- "Astrocytes_Grpr|Tbx3"
+geneLogAverage <- rowMeans(GetAssayData(subset(srt, idents = target), "data", "RNA"))
+all_markers_genes$logA <- geneLogAverage[all_markers_genes$gene]
+
+
+plt_genes <- all_markers_genes %>%
+  filter(cluster == target) %>%
+  mutate(gene = if_else(condition = (avg_log2FC >= 0.5 | avg_log2FC <= -0.5) & (pct_diff >= 0.1 | pct_diff <= -0.1),
+    gene, ""
+  ))
+
+# subselected_genes <- all_markers_genes$gene %>% .[!. %in% housekeeping_mouse]
+
+plt_genes_const <- all_markers_genes %>%
+  filter(cluster == target) %>%
+  mutate(gene = if_else(condition = (!(gene %in% housekeeping_mouse) | gene %in% genes.manual) & (avg_log2FC < -1.2 | avg_log2FC > 1.2) & (pct_diff < -0.2 | pct_diff > 0.2),
+    gene, ""
+  ))
+
+my_pal <- function(range = c(1, 6)) {
+  force(range)
+  function(x) scales::rescale(x, to = range, from = c(0, 1))
+}
+
+# plt_genes %>%
+plt_genes_const %>%
+  ggplot(
+    .,
+    aes(
+      x = logA,
+      y = avg_log2FC,
+      label = gene,
+      size = pct.1
+    )
+  ) +
+  geom_point(alpha = 0.7, colour = if_else(condition = (plt_genes$avg_log2FC >= 0.5 | plt_genes$avg_log2FC <= -0.5) & (plt_genes$pct_diff >= 0.15 | plt_genes$pct_diff <= -0.15), "orangered", "grey50")) +
+  continuous_scale(
+    aesthetics = c("size", "point.size"), scale_name = "size",
+    palette = my_pal(c(2, 9)),
+    guide = guide_legend(override.aes = list(label = "")) # hide "a" in legend
+  ) +
+  ggrepel::geom_text_repel(
+    aes(point.size = pct.1), # data point size
+    size = 6, # font size in the text labels
+    point.padding = 0, # additional padding around each point
+    min.segment.length = 0, # draw all line segments
+    max.time = 2, max.iter = 1e6, # stop after 1 second, or after 100,000 iterations
+    seed = reseed,
+    max.overlaps = Inf,
+    box.padding = 0.5
+  ) +
+  theme_light()
+```
+
+### Volcano-plot 
+
+```{r plt-volcano-astrocytes, fig.width=10, fig.height=8}
+plt_genes_const %>%
+  ggplot(
+    .,
+    aes(
+      x = avg_log2FC,
+      y = 1 / p_val_adj,
+      col = logA,
+      label = gene,
+      size = pct.1
+    )
+  ) +
+  scale_y_log10() +
+  geom_point(alpha = 0.7, colour = if_else(condition = plt_genes$avg_log2FC < 0.5 & plt_genes$avg_log2FC > -0.5, "grey50", "orangered")) +
+  continuous_scale(
+    aesthetics = c("size", "point.size"), scale_name = "size",
+    palette = my_pal(c(2, 9)),
+    guide = guide_legend(override.aes = list(label = "")) # hide "a" in legend
+  ) +
+  ggrepel::geom_text_repel(
+    aes(point.size = pct.1), # data point size
+    size = 6, # font size in the text labels
+    point.padding = 0, # additional padding around each point
+    min.segment.length = 0, # draw all line segments
+    max.time = 2, max.iter = 1e6, # stop after 1 second, or after 100,000 iterations
+    seed = reseed,
+    max.overlaps = Inf,
+    box.padding = 0.5
+  ) +
+  theme_light()
+```
+
+### Plot effect size to sample size delta
+
+```{r plt-efsss-astrocytes, fig.width=10, fig.height=8}
+plt_genes %>%
+  ggplot(
+    .,
+    aes(
+      x = avg_log2FC,
+      y = pct_diff,
+      col = -log10(p_val_adj),
+      label = gene,
+      size = pct.1
+    )
+  ) +
+  xlim(c(-4, 4)) +
+  ylim(c(-0.9, 0.9)) +
+  geom_vline(
+    xintercept = c(-0.5, 0.5),
+    linetype = "dashed",
+    colour = "grey80",
+    size = 0.3
+  ) +
+  geom_hline(
+    yintercept = c(-0.15, 0.15),
+    linetype = "dashed",
+    colour = "grey80",
+    size = 0.3
+  ) +
+  geom_vline(
+    xintercept = 0,
+    linetype = "solid",
+    colour = "black",
+    size = 0.5
+  ) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "solid",
+    colour = "black",
+    size = 0.5
+  ) +
+  geom_point(alpha = 0.7, colour = if_else(condition = (plt_genes$avg_log2FC >= 0.5 | plt_genes$avg_log2FC <= -0.5) & (plt_genes$pct_diff >= 0.15 | plt_genes$pct_diff <= -0.15), "orangered", "grey50")) +
+  continuous_scale(
+    aesthetics = c("size", "point.size"), scale_name = "size",
+    palette = my_pal(c(2, 9)),
+    guide = guide_legend(override.aes = list(label = "")) # hide "a" in legend
+  ) +
+  ggrepel::geom_text_repel(
+    aes(point.size = pct.1), # data point size
+    size = 6, # font size in the text labels
+    point.padding = 0, # additional padding around each point
+    min.segment.length = 0, # draw all line segments
+    max.time = 2, max.iter = 1e6, # stop after 1 second, or after 100,000 iterations
+    seed = reseed,
+    max.overlaps = Inf,
+    box.padding = 0.5
+  ) +
+  theme_classic()
+```
+
+```{r plt-efsss-astrocytes-le, fig.width=10, fig.height=8}
+plt_genes_const %>%
+  ggplot(
+    .,
+    aes(
+      x = avg_log2FC,
+      y = pct_diff,
+      col = -log10(p_val_adj),
+      label = gene,
+      size = pct.1
+    )
+  ) +
+  xlim(c(-4, 4)) +
+  ylim(c(-0.9, 0.9)) +
+  geom_vline(
+    xintercept = c(-0.5, 0.5),
+    linetype = "dashed",
+    colour = "grey80",
+    size = 0.3
+  ) +
+  geom_hline(
+    yintercept = c(-0.15, 0.15),
+    linetype = "dashed",
+    colour = "grey80",
+    size = 0.3
+  ) +
+  geom_vline(
+    xintercept = 0,
+    linetype = "solid",
+    colour = "black",
+    size = 0.5
+  ) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "solid",
+    colour = "black",
+    size = 0.5
+  ) +
+  geom_point(alpha = 0.7, colour = if_else(condition = (plt_genes$avg_log2FC < -0.5 & plt_genes$avg_log2FC > 0.5) &
+    (plt_genes$pct_diff < -0.15 & plt_genes$pct_diff > 0.15), "navy", "grey50")) +
+  continuous_scale(
+    aesthetics = c("size", "point.size"), scale_name = "size",
+    palette = my_pal(c(2, 9)),
+    guide = guide_legend(override.aes = list(label = "")) # hide "a" in legend
+  ) +
+  ggrepel::geom_text_repel(
+    aes(point.size = pct.1), # data point size
+    size = 6, # font size in the text labels
+    point.padding = 0, # additional padding around each point
+    min.segment.length = 0, # draw all line segments
+    max.time = 2, max.iter = 1e6, # stop after 1 second, or after 100,000 iterations
+    seed = reseed,
+    max.overlaps = Inf,
+    box.padding = 0.5
+  ) +
+  theme_classic()
+```
+
+
+## Astrocytes excluded
+
+### MA-plot
+
+```{r plt-ma-astrocytes-excluded, fig.width=10, fig.height=6}
+all_markers_genes <- all_markers_genes_class
+target <- "Astrocytes"
+geneLogAverage <- rowMeans(GetAssayData(subset(srt, idents = target), "data", "RNA"))
+all_markers_genes$logA <- geneLogAverage[all_markers_genes$gene]
+
+
+plt_genes <- all_markers_genes %>%
+  filter(cluster == target) %>%
+  mutate(gene = if_else(condition = (avg_log2FC >= 0.5 | avg_log2FC <= -0.5) & (pct_diff >= 0.1 | pct_diff <= -0.1),
+    gene, ""
+  ))
+
+# subselected_genes <- all_markers_genes$gene %>% .[!. %in% housekeeping_mouse]
+
+plt_genes_const <- all_markers_genes %>%
+  filter(cluster == target) %>%
+  mutate(gene = if_else(condition = (!(gene %in% housekeeping_mouse) | gene %in% genes.manual) & (avg_log2FC < -1.2 | avg_log2FC > 1.2) & (pct_diff < -0.2 | pct_diff > 0.2),
+    gene, ""
+  ))
+
+my_pal <- function(range = c(1, 6)) {
+  force(range)
+  function(x) scales::rescale(x, to = range, from = c(0, 1))
+}
+
+# plt_genes %>%
+plt_genes_const %>%
+  ggplot(
+    .,
+    aes(
+      x = logA,
+      y = avg_log2FC,
+      label = gene,
+      size = pct.1
+    )
+  ) +
+  geom_point(alpha = 0.7, colour = if_else(condition = (plt_genes$avg_log2FC >= 0.5 | plt_genes$avg_log2FC <= -0.5) & (plt_genes$pct_diff >= 0.15 | plt_genes$pct_diff <= -0.15), "orangered", "grey50")) +
+  continuous_scale(
+    aesthetics = c("size", "point.size"), scale_name = "size",
+    palette = my_pal(c(2, 9)),
+    guide = guide_legend(override.aes = list(label = "")) # hide "a" in legend
+  ) +
+  ggrepel::geom_text_repel(
+    aes(point.size = pct.1), # data point size
+    size = 6, # font size in the text labels
+    point.padding = 0, # additional padding around each point
+    min.segment.length = 0, # draw all line segments
+    max.time = 2, max.iter = 1e6, # stop after 1 second, or after 100,000 iterations
+    seed = reseed,
+    max.overlaps = Inf,
+    box.padding = 0.5
+  ) +
+  theme_light()
+```
+
+### Volcano-plot 
+
+```{r plt-volcano-astrocytes-excluded, fig.width=10, fig.height=8}
+plt_genes_const %>%
+  ggplot(
+    .,
+    aes(
+      x = avg_log2FC,
+      y = 1 / p_val_adj,
+      col = logA,
+      label = gene,
+      size = pct.1
+    )
+  ) +
+  scale_y_log10() +
+  geom_point(alpha = 0.7, colour = if_else(condition = plt_genes$avg_log2FC < 0.5 & plt_genes$avg_log2FC > -0.5, "grey50", "orangered")) +
+  continuous_scale(
+    aesthetics = c("size", "point.size"), scale_name = "size",
+    palette = my_pal(c(2, 9)),
+    guide = guide_legend(override.aes = list(label = "")) # hide "a" in legend
+  ) +
+  ggrepel::geom_text_repel(
+    aes(point.size = pct.1), # data point size
+    size = 6, # font size in the text labels
+    point.padding = 0, # additional padding around each point
+    min.segment.length = 0, # draw all line segments
+    max.time = 2, max.iter = 1e6, # stop after 1 second, or after 100,000 iterations
+    seed = reseed,
+    max.overlaps = Inf,
+    box.padding = 0.5
+  ) +
+  theme_light()
+```
+
+### Plot effect size to sample size delta
+
+```{r plt-efsss-astrocytes-excluded, fig.width=10, fig.height=8}
+plt_genes %>%
+  ggplot(
+    .,
+    aes(
+      x = avg_log2FC,
+      y = pct_diff,
+      col = -log10(p_val_adj),
+      label = gene,
+      size = pct.1
+    )
+  ) +
+  xlim(c(-4, 4)) +
+  ylim(c(-0.9, 0.9)) +
+  geom_vline(
+    xintercept = c(-0.5, 0.5),
+    linetype = "dashed",
+    colour = "grey80",
+    size = 0.3
+  ) +
+  geom_hline(
+    yintercept = c(-0.15, 0.15),
+    linetype = "dashed",
+    colour = "grey80",
+    size = 0.3
+  ) +
+  geom_vline(
+    xintercept = 0,
+    linetype = "solid",
+    colour = "black",
+    size = 0.5
+  ) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "solid",
+    colour = "black",
+    size = 0.5
+  ) +
+  geom_point(alpha = 0.7, colour = if_else(condition = (plt_genes$avg_log2FC >= 0.5 | plt_genes$avg_log2FC <= -0.5) & (plt_genes$pct_diff >= 0.15 | plt_genes$pct_diff <= -0.15), "orangered", "grey50")) +
+  continuous_scale(
+    aesthetics = c("size", "point.size"), scale_name = "size",
+    palette = my_pal(c(2, 9)),
+    guide = guide_legend(override.aes = list(label = "")) # hide "a" in legend
+  ) +
+  ggrepel::geom_text_repel(
+    aes(point.size = pct.1), # data point size
+    size = 6, # font size in the text labels
+    point.padding = 0, # additional padding around each point
+    min.segment.length = 0, # draw all line segments
+    max.time = 2, max.iter = 1e6, # stop after 1 second, or after 100,000 iterations
+    seed = reseed,
+    max.overlaps = Inf,
+    box.padding = 0.5
+  ) +
+  theme_classic()
+```
+
+```{r plt-efsss-astrocytes-excluded-le, fig.width=10, fig.height=8}
+plt_genes_const %>%
+  ggplot(
+    .,
+    aes(
+      x = avg_log2FC,
+      y = pct_diff,
+      col = -log10(p_val_adj),
+      label = gene,
+      size = pct.1
+    )
+  ) +
+  xlim(c(-4, 4)) +
+  ylim(c(-0.9, 0.9)) +
+  geom_vline(
+    xintercept = c(-0.5, 0.5),
+    linetype = "dashed",
+    colour = "grey80",
+    size = 0.3
+  ) +
+  geom_hline(
+    yintercept = c(-0.15, 0.15),
+    linetype = "dashed",
+    colour = "grey80",
+    size = 0.3
+  ) +
+  geom_vline(
+    xintercept = 0,
+    linetype = "solid",
+    colour = "black",
+    size = 0.5
+  ) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "solid",
+    colour = "black",
+    size = 0.5
+  ) +
+  geom_point(alpha = 0.7, colour = if_else(condition = (plt_genes$avg_log2FC < -0.5 & plt_genes$avg_log2FC > 0.5) &
+    (plt_genes$pct_diff < -0.15 & plt_genes$pct_diff > 0.15), "navy", "grey50")) +
+  continuous_scale(
+    aesthetics = c("size", "point.size"), scale_name = "size",
+    palette = my_pal(c(2, 9)),
+    guide = guide_legend(override.aes = list(label = "")) # hide "a" in legend
+  ) +
+  ggrepel::geom_text_repel(
+    aes(point.size = pct.1), # data point size
+    size = 6, # font size in the text labels
+    point.padding = 0, # additional padding around each point
+    min.segment.length = 0, # draw all line segments
+    max.time = 2, max.iter = 1e6, # stop after 1 second, or after 100,000 iterations
+    seed = reseed,
+    max.overlaps = Inf,
+    box.padding = 0.5
+  ) +
+  theme_classic()
+```
+
+## Session information
+
+```{r session-info, cache = FALSE}
+sI <- sessioninfo::session_info()
+sI$loadedOnly <- NULL
+print(sI, locale = FALSE)
+```
+

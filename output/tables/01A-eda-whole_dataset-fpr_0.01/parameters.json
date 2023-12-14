@@ -1,0 +1,58 @@
+[
+  {
+    "Parameter": ["high_cutoff_umis"],
+    "Value": [30000],
+    "Description": ["Maximum threshold for total counts"]
+  },
+  {
+    "Parameter": ["low_cutoff_gene"],
+    "Value": [500],
+    "Description": ["Minimum threshold for total features"]
+  },
+  {
+    "Parameter": ["high_cutoff_gene"],
+    "Value": [7500],
+    "Description": ["Maximum threshold for total features"]
+  },
+  {
+    "Parameter": ["high_cutoff_pc_mt"],
+    "Value": [2],
+    "Description": ["Maximum threshold for percentage counts mitochondrial"]
+  },
+  {
+    "Parameter": ["high_cutoff_pc_ribo"],
+    "Value": [5],
+    "Description": ["Maximum threshold for percentage counts ribosomal"]
+  },
+  {
+    "Parameter": ["high_cutoff_pc_hb"],
+    "Value": [0.1],
+    "Description": ["Maximum threshold for percentage counts hemoglobin"]
+  },
+  {
+    "Parameter": ["high_cutoff_complexity"],
+    "Value": [0.85],
+    "Description": ["Maximum threshold for cells complexity"]
+  },
+  {
+    "Parameter": ["n_cells"],
+    "Value": [25790],
+    "Description": ["Number of cells in the filtered dataset"]
+  },
+  {
+    "Parameter": ["n_genes"],
+    "Value": [25753],
+    "Description": ["Number of genes in the filtered dataset"]
+  },
+  {
+    "Parameter": ["median_genes"],
+    "Value": [2585],
+    "Description": ["Median number of expressed genes per cell in the filtered dataset"]
+  },
+  {
+    "Parameter": ["median_counts"],
+    "Value": [4973],
+    "Description": ["Median number of counts per cell in the filtered dataset"]
+  },
+  ["n_cells-SRR14252354", "2834", "Number of cells in the filtered SRR14252354 dataset", "n_cells-SRR14252355", "2263", "Number of cells in the filtered SRR14252355 dataset", "n_cells-SRR14252356", "3874", "Number of cells in the filtered SRR14252356 dataset", "n_cells-SRR14252357", "1459", "Number of cells in the filtered SRR14252357 dataset", "n_cells-SRR14252358", "2087", "Number of cells in the filtered SRR14252358 dataset", "n_cells-SRR14252359", "3813", "Number of cells in the filtered SRR14252359 dataset", "n_cells-SRR14252360", "2077", "Number of cells in the filtered SRR14252360 dataset", "n_cells-SRR14252362", "3587", "Number of cells in the filtered SRR14252362 dataset", "n_cells-SRR14252363", "3796", "Number of cells in the filtered SRR14252363 dataset"]
+]
